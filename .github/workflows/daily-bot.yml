@@ -13,6 +13,9 @@ jobs:
   run-bots:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
 
     steps:
       - name: Checkout
@@ -31,6 +34,21 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
+      - name: Restore rolling history from previous run artifact
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: daily-bot.yml
+          branch: ${{ github.ref_name }}
+          name: giveaway-bot-status
+          path: .
+          if_no_artifact_found: warn
+
+      - name: Ensure history/status paths exist
+        run: |
+          mkdir -p logs
+          test -f logs/giveaway_history.json || echo "[]" > logs/giveaway_history.json
+
       - name: Run daily sweep (one-shot)
         env:
           GOODREADS_USERNAME: ${{ secrets.GOODREADS_USERNAME }}
@@ -44,7 +62,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: giveaway-bot-status-${{ github.run_id }}
+          name: giveaway-bot-status
           path: |
             bot_status.json
             logs/giveaway_history.json

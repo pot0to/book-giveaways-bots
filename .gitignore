@@ -3,3 +3,4 @@ secrets.local.json
 bot_status.json
 logs/giveaway_history.json
 __pycache__/
+.vscode/
