@@ -1,0 +1,2 @@
+2. Add support for other browsers.
+3. Add support for other login formats.

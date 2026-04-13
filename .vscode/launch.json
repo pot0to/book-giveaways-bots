@@ -1,0 +1,15 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File (Goodreads Env)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "python": "C:\\Users\\wheeeee\\anaconda3\\envs\\goodreads\\python.exe",
+            "console": "integratedTerminal",
+            "cwd": "${fileDirname}",
+            "justMyCode": true
+        }
+    ]
+}

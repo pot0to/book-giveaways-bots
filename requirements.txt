@@ -1,0 +1,14 @@
+# Core browser automation
+playwright==1.49.0
+
+# Anti-bot evasion
+playwright-stealth==2.0.1
+
+# Scheduling for daily runs
+schedule==1.2.2
+
+# For Discord webhook
+requests==2.32.3
+
+# For status server dashboard
+Flask==3.0.0

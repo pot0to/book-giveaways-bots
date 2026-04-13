@@ -1,0 +1,7 @@
+{
+    "credentials": {
+        "goodreads": {"username": "", "password": ""},
+        "storygraph": {"username": "", "password": ""}
+    },
+    "discord_webhook": ""
+}

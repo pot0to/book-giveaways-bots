@@ -1,0 +1,5 @@
+credentials.json
+secrets.local.json
+bot_status.json
+logs/giveaway_history.json
+__pycache__/
