@@ -19,12 +19,15 @@ def get_goodreads_creds():
 
 def email_sign_in(page):
     username, password = get_goodreads_creds()
+    if not username or not password:
+        raise RuntimeError("Missing GoodReads credentials. Set env vars or secrets.local.json values.")
+
     page.goto("https://www.goodreads.com/user/sign_in")
     
     # Playwright auto-waits for these buttons to be ready
     page.click("button.authPortalSignInButton")
-    page.fill('input[name="email"]', username)
-    page.fill('input[name="password"]', password)
+    page.locator('input[name="email"]').fill(str(username))
+    page.locator('input[name="password"]').fill(str(password))
     page.click('input[id="signInSubmit"]')
     page.wait_for_selector("img.circularIcon--border", timeout=15000)
     print("Login confirmed: Profile picture found.")
@@ -158,9 +161,11 @@ def remove_from_my_books(page, recently_closed_giveaways):
     with open("removed.txt", "w+", encoding="utf-8") as f:
         for book_title in recently_closed_giveaways:
             try:
+                if not book_title:
+                    continue
                 # 2. Search for the specific book title
                 # We use .fill() instead of .send_keys() for cleaner input
-                page.fill("input#sitesearch_field", book_title)
+                page.locator("input#sitesearch_field").fill(str(book_title))
                 page.click("a.myBooksSearchButton")
 
                 # 3. Wait for the results to load

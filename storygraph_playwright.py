@@ -17,24 +17,28 @@ def get_storygraph_creds():
 
 def email_sign_in(page):
     username, password = get_storygraph_creds()
-    if not username: return
+    if not username or not password:
+        raise RuntimeError("Missing StoryGraph credentials. Set env vars or secrets.local.json values.")
 
     page.goto("https://app.thestorygraph.com/users/sign_in")
-    page.fill("input[name='user[email]']", username)
-    page.fill("input[name='user[password]']", password)
+    page.locator("input[name='user[email]']").fill(str(username))
+    page.locator("input[name='user[password]']").fill(str(password))
     page.click("button#sign-in-btn")
-    
-    # Wait for the dashboard to load (checking for a common logged-in element)
-    page.locator("nav#navbar").wait_for(state="visible")
+
+    # StoryGraph markup changes often; wait until we actually leave the sign-in page.
+    page.wait_for_function("() => !window.location.pathname.includes('/users/sign_in')", timeout=45000)
+    page.wait_for_load_state("domcontentloaded")
     print("Logged into StoryGraph successfully.")
 
 def enter_all_giveaways(page):
     page.goto("https://app.thestorygraph.com/giveaways")
-    page.locator("nav#navbar").wait_for(state="visible")
+    page.locator("body").wait_for(state="visible")
     
     # 1. Expand Filters
     # StoryGraph uses specific dark/light mode classes, we use a more robust selector
-    page.locator(".toggle-filter-menu:visible").click()
+    filter_menu = page.locator(".toggle-filter-menu:visible").first
+    if filter_menu.count() > 0:
+        filter_menu.click()
     
     # 2. Set Genres (Fiction, Fantasy, Sci-Fi)
     page.check("input[name='type_fiction']")
@@ -56,12 +60,11 @@ def enter_all_giveaways(page):
     page.wait_for_selector(".giveaway-pane")
 
     # 4. Loop through Giveaway Panes
-    giveaway_data = []
-    panes = page.locator(".giveaway-pane").all()
-    
-    giveawaysEntered = 0
+    giveawaysEntered = 1
     entered_titles = []
     while giveawaysEntered > 0:
+        giveaway_data = []
+        panes = page.locator(".giveaway-pane").all()
         giveawaysEntered = 0
         for pane in panes:
             # Check the entire text of the pane for the 'Entered' status
