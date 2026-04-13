@@ -1,5 +1,6 @@
 import json
 import time, requests
+import base64
 from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -33,12 +34,38 @@ def _is_goodreads_challenge(page):
     body_text = page.locator("body").inner_text(timeout=5000).lower()
     return "captcha" in body_text or "verify you are a human" in body_text
 
+def _is_goodreads_logged_in(page):
+    if "goodreads.com/user/sign_in" not in (page.url or ""):
+        if page.locator("a[href*='/review/list/'], a[href*='/user/show/']").count() > 0:
+            return True
+    return page.locator("a.siteHeader__topLevelLink[href*='/review/list/'], a[href*='/review/list/']").count() > 0
+
+def _restore_storage_state_from_env(state_path, var_prefix):
+    state_json = os.getenv(f"{var_prefix}_STORAGE_STATE_JSON")
+    state_b64 = os.getenv(f"{var_prefix}_STORAGE_STATE_B64")
+
+    if state_json:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(state_json, encoding="utf-8")
+        print(f"Restored {state_path.name} from env JSON.")
+        return
+
+    if state_b64:
+        decoded = base64.b64decode(state_b64).decode("utf-8")
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(decoded, encoding="utf-8")
+        print(f"Restored {state_path.name} from env base64.")
+
 def email_sign_in(page):
     username, password = get_goodreads_creds()
     if not username or not password:
         raise RuntimeError("Missing GoodReads credentials. Set env vars or secrets.local.json values.")
 
     page.goto("https://www.goodreads.com/user/sign_in", wait_until="domcontentloaded")
+
+    if _is_goodreads_logged_in(page):
+        print("Using existing Goodreads session.")
+        return
 
     if _is_goodreads_challenge(page):
         raise RuntimeError("Goodreads anti-bot challenge detected at login. Re-run with a warm/persisted session or slower schedule.")
@@ -52,13 +79,21 @@ def email_sign_in(page):
     if auth_portal_button.count() > 0:
         auth_portal_button.first.click()
 
+    # Goodreads occasionally renders an intermediate auth choice view.
+    email_cta = page.locator("button:has-text('Sign in with email'), a:has-text('Sign in with email')")
+    if email_cta.count() > 0:
+        email_cta.first.click()
+
     page.locator('input[name="email"], input[type="email"]').first.fill(str(username))
     page.locator('input[name="password"], input[type="password"]').first.fill(str(password))
     page.locator('input[id="signInSubmit"], button[type="submit"], input[type="submit"]').first.click()
 
     try:
-        page.wait_for_selector("img.circularIcon--border, a[href*='/review/list/']", timeout=20000)
+        page.wait_for_selector("img.circularIcon--border, a[href*='/review/list/'], a[href*='/user/show/']", timeout=20000)
     except PlaywrightTimeoutError as exc:
+        if _is_goodreads_logged_in(page):
+            print("Goodreads login confirmed.")
+            return
         if _is_goodreads_challenge(page):
             raise RuntimeError("Goodreads anti-bot challenge detected after sign-in submit.") from exc
         raise RuntimeError(f"Goodreads login confirmation timeout at URL: {page.url}") from exc
@@ -234,6 +269,7 @@ def run_goodreads():
             args=["--disable-blink-features=AutomationControlled"]
         )
 
+        _restore_storage_state_from_env(GOODREADS_STATE_PATH, "GOODREADS")
         GOODREADS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         context_options = {
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"

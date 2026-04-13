@@ -1,6 +1,7 @@
 name: Daily Giveaway Bot
 
 on:
+  push:
   schedule:
     - cron: "0 12 * * *"
   workflow_dispatch:
@@ -48,13 +49,19 @@ jobs:
         run: |
           mkdir -p logs
           test -f logs/giveaway_history.json || echo "[]" > logs/giveaway_history.json
+          test -f logs/goodreads_state.json || echo "{}" > logs/goodreads_state.json
+          test -f logs/storygraph_state.json || echo "{}" > logs/storygraph_state.json
 
       - name: Run daily sweep (one-shot)
         env:
           GOODREADS_USERNAME: ${{ secrets.GOODREADS_USERNAME }}
           GOODREADS_PASSWORD: ${{ secrets.GOODREADS_PASSWORD }}
+          GOODREADS_STORAGE_STATE_JSON: ${{ secrets.GOODREADS_STORAGE_STATE_JSON }}
+          GOODREADS_STORAGE_STATE_B64: ${{ secrets.GOODREADS_STORAGE_STATE_B64 }}
           STORYGRAPH_USERNAME: ${{ secrets.STORYGRAPH_USERNAME }}
           STORYGRAPH_PASSWORD: ${{ secrets.STORYGRAPH_PASSWORD }}
+          STORYGRAPH_STORAGE_STATE_JSON: ${{ secrets.STORYGRAPH_STORAGE_STATE_JSON }}
+          STORYGRAPH_STORAGE_STATE_B64: ${{ secrets.STORYGRAPH_STORAGE_STATE_B64 }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: python main.py --mode once
 
@@ -66,4 +73,6 @@ jobs:
           path: |
             bot_status.json
             logs/giveaway_history.json
+            logs/goodreads_state.json
+            logs/storygraph_state.json
           if-no-files-found: warn

@@ -1,5 +1,6 @@
 import json
 import time, requests
+import base64
 from datetime import datetime
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -31,12 +32,37 @@ def _is_storygraph_challenge(page):
     body_text = page.locator("body").inner_text(timeout=5000).lower()
     return "verify you are human" in body_text or "captcha" in body_text
 
+def _is_storygraph_logged_in(page):
+    if "/users/sign_in" in (page.url or ""):
+        return False
+    return page.locator("a[href='/giveaways'], a[href*='/profile'], a[href*='/currently-reading']").count() > 0
+
+def _restore_storage_state_from_env(state_path, var_prefix):
+    state_json = os.getenv(f"{var_prefix}_STORAGE_STATE_JSON")
+    state_b64 = os.getenv(f"{var_prefix}_STORAGE_STATE_B64")
+
+    if state_json:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(state_json, encoding="utf-8")
+        print(f"Restored {state_path.name} from env JSON.")
+        return
+
+    if state_b64:
+        decoded = base64.b64decode(state_b64).decode("utf-8")
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(decoded, encoding="utf-8")
+        print(f"Restored {state_path.name} from env base64.")
+
 def email_sign_in(page):
     username, password = get_storygraph_creds()
     if not username or not password:
         raise RuntimeError("Missing StoryGraph credentials. Set env vars or secrets.local.json values.")
 
     page.goto("https://app.thestorygraph.com/users/sign_in", wait_until="domcontentloaded")
+
+    if _is_storygraph_logged_in(page):
+        print("Using existing StoryGraph session.")
+        return
 
     if _is_storygraph_challenge(page):
         raise RuntimeError("StoryGraph anti-bot challenge detected at login.")
@@ -46,9 +72,22 @@ def email_sign_in(page):
         print("Using existing StoryGraph session.")
         return
 
-    email_input = page.locator("input[name='user[email]'], input[type='email'], input[name*='email']").first
-    password_input = page.locator("input[name='user[password]'], input[type='password']").first
-    sign_in_button = page.locator("button#sign-in-btn, button[type='submit'], input[type='submit']").first
+    # StoryGraph occasionally places the email form behind an "email sign in" CTA.
+    email_cta = page.locator(
+        "button:has-text('Sign in with email'), a:has-text('Sign in with email'), button:has-text('Continue with email')"
+    )
+    if email_cta.count() > 0:
+        email_cta.first.click()
+
+    email_input = page.locator(
+        "input[name='user[email]'], input[type='email'], input[name*='email'], input[id*='email']"
+    ).first
+    password_input = page.locator(
+        "input[name='user[password]'], input[type='password'], input[id*='password']"
+    ).first
+    sign_in_button = page.locator(
+        "button#sign-in-btn, button[type='submit'], input[type='submit'], button:has-text('Sign in')"
+    ).first
 
     try:
         email_input.wait_for(state="visible", timeout=12000)
@@ -62,11 +101,17 @@ def email_sign_in(page):
     sign_in_button.click()
 
     # StoryGraph markup changes often; wait until we actually leave the sign-in page.
-    page.wait_for_function("() => !window.location.pathname.includes('/users/sign_in')", timeout=45000)
+    page.wait_for_function(
+        "() => !window.location.pathname.includes('/users/sign_in') || document.querySelector(\"a[href='/giveaways']\") !== null",
+        timeout=45000
+    )
+    if _is_storygraph_logged_in(page):
+        page.wait_for_load_state("domcontentloaded")
+        print("Logged into StoryGraph successfully.")
+        return
     if _is_storygraph_challenge(page):
         raise RuntimeError("StoryGraph anti-bot challenge detected after sign-in submit.")
-    page.wait_for_load_state("domcontentloaded")
-    print("Logged into StoryGraph successfully.")
+    raise RuntimeError(f"StoryGraph login did not complete at URL: {page.url}")
 
 def enter_all_giveaways(page):
     page.goto("https://app.thestorygraph.com/giveaways")
@@ -201,6 +246,7 @@ def run_storygraph():
             args=["--disable-blink-features=AutomationControlled"]
         )
 
+        _restore_storage_state_from_env(STORYGRAPH_STATE_PATH, "STORYGRAPH")
         STORYGRAPH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         context_options = {
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
