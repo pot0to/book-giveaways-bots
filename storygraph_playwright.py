@@ -1,10 +1,19 @@
 import json
 import time, requests
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from pathlib import Path
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import random
 import os
 from utils import *
+
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    def stealth_sync(_page):
+        return None
+
+STORYGRAPH_STATE_PATH = Path("logs/storygraph_state.json")
 
 def get_storygraph_creds():
     username = os.getenv("STORYGRAPH_USERNAME")
@@ -15,18 +24,47 @@ def get_storygraph_creds():
     creds = config.get("credentials", {}).get("storygraph", {})
     return creds.get("username"), creds.get("password")
 
+def _is_storygraph_challenge(page):
+    url = (page.url or "").lower()
+    if "cdn-cgi/challenge-platform" in url:
+        return True
+    body_text = page.locator("body").inner_text(timeout=5000).lower()
+    return "verify you are human" in body_text or "captcha" in body_text
+
 def email_sign_in(page):
     username, password = get_storygraph_creds()
     if not username or not password:
         raise RuntimeError("Missing StoryGraph credentials. Set env vars or secrets.local.json values.")
 
-    page.goto("https://app.thestorygraph.com/users/sign_in")
-    page.locator("input[name='user[email]']").fill(str(username))
-    page.locator("input[name='user[password]']").fill(str(password))
-    page.click("button#sign-in-btn")
+    page.goto("https://app.thestorygraph.com/users/sign_in", wait_until="domcontentloaded")
+
+    if _is_storygraph_challenge(page):
+        raise RuntimeError("StoryGraph anti-bot challenge detected at login.")
+
+    # If persisted auth is valid, sign-in form may not be present.
+    if "/users/sign_in" not in page.url and page.locator("a[href='/giveaways'], a[href*='/profile']").count() > 0:
+        print("Using existing StoryGraph session.")
+        return
+
+    email_input = page.locator("input[name='user[email]'], input[type='email'], input[name*='email']").first
+    password_input = page.locator("input[name='user[password]'], input[type='password']").first
+    sign_in_button = page.locator("button#sign-in-btn, button[type='submit'], input[type='submit']").first
+
+    try:
+        email_input.wait_for(state="visible", timeout=12000)
+    except PlaywrightTimeoutError as exc:
+        if _is_storygraph_challenge(page):
+            raise RuntimeError("StoryGraph anti-bot challenge detected before login form rendered.") from exc
+        raise RuntimeError(f"StoryGraph login form not found at URL: {page.url}") from exc
+
+    email_input.fill(str(username))
+    password_input.fill(str(password))
+    sign_in_button.click()
 
     # StoryGraph markup changes often; wait until we actually leave the sign-in page.
     page.wait_for_function("() => !window.location.pathname.includes('/users/sign_in')", timeout=45000)
+    if _is_storygraph_challenge(page):
+        raise RuntimeError("StoryGraph anti-bot challenge detected after sign-in submit.")
     page.wait_for_load_state("domcontentloaded")
     print("Logged into StoryGraph successfully.")
 
@@ -162,16 +200,24 @@ def run_storygraph():
             headless=True,
             args=["--disable-blink-features=AutomationControlled"]
         )
+
+        STORYGRAPH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        context_options = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        if STORYGRAPH_STATE_PATH.exists():
+            context_options["storage_state"] = str(STORYGRAPH_STATE_PATH)
+
         # Create a context that looks like a real Windows Chrome browser
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+        context = browser.new_context(**context_options)
         page = context.new_page()
+        stealth_sync(page)
 
         entered, won, lost = [], [], []
 
         try:
             email_sign_in(page)
+            context.storage_state(path=str(STORYGRAPH_STATE_PATH))
             entered = enter_all_giveaways(page)
             return entered, won, lost
         finally:

@@ -1,10 +1,19 @@
 import json
 import time, requests
 from datetime import datetime
-from playwright.sync_api import sync_playwright
+from pathlib import Path
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 import random
 import os
 from utils import *
+
+try:
+    from playwright_stealth import stealth_sync
+except ImportError:
+    def stealth_sync(_page):
+        return None
+
+GOODREADS_STATE_PATH = Path("logs/goodreads_state.json")
 
 # --- Setup constants ---
 
@@ -17,20 +26,44 @@ def get_goodreads_creds():
     creds = config.get("credentials", {}).get("goodreads", {})
     return creds.get("username"), creds.get("password")
 
+def _is_goodreads_challenge(page):
+    url = (page.url or "").lower()
+    if "goodreads.com/ap/cvf/request" in url:
+        return True
+    body_text = page.locator("body").inner_text(timeout=5000).lower()
+    return "captcha" in body_text or "verify you are a human" in body_text
+
 def email_sign_in(page):
     username, password = get_goodreads_creds()
     if not username or not password:
         raise RuntimeError("Missing GoodReads credentials. Set env vars or secrets.local.json values.")
 
-    page.goto("https://www.goodreads.com/user/sign_in")
-    
-    # Playwright auto-waits for these buttons to be ready
-    page.click("button.authPortalSignInButton")
-    page.locator('input[name="email"]').fill(str(username))
-    page.locator('input[name="password"]').fill(str(password))
-    page.click('input[id="signInSubmit"]')
-    page.wait_for_selector("img.circularIcon--border", timeout=15000)
-    print("Login confirmed: Profile picture found.")
+    page.goto("https://www.goodreads.com/user/sign_in", wait_until="domcontentloaded")
+
+    if _is_goodreads_challenge(page):
+        raise RuntimeError("Goodreads anti-bot challenge detected at login. Re-run with a warm/persisted session or slower schedule.")
+
+    # If persisted auth is still valid, Goodreads often redirects away from sign-in.
+    if "/user/sign_in" not in page.url and page.locator("a[href*='/review/list/']").count() > 0:
+        print("Using existing Goodreads session.")
+        return
+
+    auth_portal_button = page.locator("button.authPortalSignInButton")
+    if auth_portal_button.count() > 0:
+        auth_portal_button.first.click()
+
+    page.locator('input[name="email"], input[type="email"]').first.fill(str(username))
+    page.locator('input[name="password"], input[type="password"]').first.fill(str(password))
+    page.locator('input[id="signInSubmit"], button[type="submit"], input[type="submit"]').first.click()
+
+    try:
+        page.wait_for_selector("img.circularIcon--border, a[href*='/review/list/']", timeout=20000)
+    except PlaywrightTimeoutError as exc:
+        if _is_goodreads_challenge(page):
+            raise RuntimeError("Goodreads anti-bot challenge detected after sign-in submit.") from exc
+        raise RuntimeError(f"Goodreads login confirmation timeout at URL: {page.url}") from exc
+
+    print("Goodreads login confirmed.")
 
 def enter_giveaway(page, book_article):
     # 1. Click the 'Enter Giveaway' button and wait for the new tab to open
@@ -200,16 +233,24 @@ def run_goodreads():
             headless=True,
             args=["--disable-blink-features=AutomationControlled"]
         )
+
+        GOODREADS_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        context_options = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        if GOODREADS_STATE_PATH.exists():
+            context_options["storage_state"] = str(GOODREADS_STATE_PATH)
+
         # Create a context that looks like a real Windows Chrome browser
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
+        context = browser.new_context(**context_options)
         page = context.new_page()
+        stealth_sync(page)
 
         entered, won, lost = [], [], []
 
         try:
             email_sign_in(page)
+            context.storage_state(path=str(GOODREADS_STATE_PATH))
             entered += enter_giveaways_for_category(page, r"https://www.goodreads.com/giveaway/genre/Science%20fiction?sort=featured&format=print")
             entered += enter_giveaways_for_category(page, r"https://www.goodreads.com/giveaway/genre/Fantasy?sort=featured&format=print")
 
